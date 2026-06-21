@@ -1,0 +1,63 @@
+
+================================================================================
+     ACT Cross-Environment Generalization Analysis Report
+================================================================================
+
+1. EXPERIMENTAL SETUP
+   - Algorithm: ACT (Action Chunking Transformer) with VAE objective
+   - Vision Backbone: ResNet-18 (ImageNet pretrained)
+   - Chunk Size: 100 action steps
+   - Training Data:
+     * Model A (Env-B Only):  308918 samples from Environment B
+     * Model B (Env-ABC Joint): 308918 samples from Environments A+B+C
+   - Test Data: Environment D (completely unseen, zero-shot)
+
+2. ZERO-SHOT PERFORMANCE ON ENVIRONMENT D
+   ----------------------------------------------------------------------------
+   Metric                    Env-B Only      Env-ABC Joint     Δ
+   ----------------------------------------------------------------------------
+   Mean L1 Loss              0.765969        0.687763        -0.078207
+   Mean MSE Loss             0.640333        0.541997        -0.098336
+   Early Chunk L1            0.737261        0.634311        -0.102950
+   Late Chunk L1             0.794666        0.741216        -0.053450
+   Chunk Error Growth        0.057405        0.106905        +0.049500
+   ----------------------------------------------------------------------------
+   Relative L1 Change: -10.21%
+
+3. ANALYSIS OF ACT ACTION CHUNKING UNDER VISUAL DISTRIBUTION SHIFT
+
+   ACT predicts a sequence (chunk) of 30 future actions at each
+   inference step. Under visual distribution shift (Environment D has different
+   lighting, backgrounds, object positions than Environments A/B/C):
+
+   a) Chunk Error Growth:
+      - Env-B Only:  0.057405
+      - Env-ABC Joint: 0.106905
+
+      The chunk error growth measures how much the prediction error increases
+      from the early timesteps (near future) to the late timesteps (far future)
+      of the predicted action chunk. Smaller growth indicates better temporal
+      consistency.
+
+   b) Interpretation:
+      - If the multi-environment model shows SMALLER chunk error growth,
+        this suggests that training on diverse visual environments improves
+        the temporal stability of action predictions under domain shift.
+      - If both models show similar growth, the chunking mechanism itself
+        provides inherent robustness to visual variations.
+      - Large growth indicates that visual distribution shift primarily
+        affects long-horizon action predictions.
+
+   c) Action Chunking Robustness:
+      ACT's action chunking provides temporal smoothing — even if individual
+      frame predictions are noisy due to visual shift, the chunk-level
+      prediction enforces temporal consistency across the action sequence.
+      This is a key advantage over single-step policies.
+
+4. CONCLUSIONS
+   (Fill in based on the quantitative results above.)
+   - The multi-environment joint training improves
+     zero-shot L1 loss by 10.21%.
+   - Visual distribution shift affects long-horizon predictions more severely, as shown by chunk error growth differences.
+
+================================================================================

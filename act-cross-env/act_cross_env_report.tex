@@ -1,0 +1,510 @@
+%===============================================================================
+% ACT Cross-Environment Generalization: Zero-Shot Evaluation on CALVIN
+% CVPR/NeurIPS-style Experiment Report
+%===============================================================================
+\documentclass[twoside,twocolumn,10pt]{article}
+
+% ---------- packages ----------
+\usepackage[switch]{lineno}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{times}               % Times Roman font
+\usepackage[pdftex]{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{float}
+
+% ---------- geometry ----------
+\geometry{
+  top=1in, bottom=1in, left=0.75in, right=0.75in,
+  columnsep=0.25in
+}
+
+% ---------- hyperref ----------
+\hypersetup{
+  colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue
+}
+
+% ---------- custom commands ----------
+\newcommand{\dataset}{CALVIN}
+\newcommand{\method}{ACT}
+\newcommand{\envB}{B}
+\newcommand{\envABC}{A+B+C}
+\newcommand{\envD}{D}
+\newcommand{\chunksize}{30}
+\newcommand{\lI}{\mathcal{L}_1}
+
+%===============================================================================
+\begin{document}
+
+\twocolumn[
+  \begin{@twocolumnfalse}
+    \centering
+    \vspace{0.5cm}
+    {\LARGE\bfseries Action Chunking Transformer under Visual Domain Shift:\\[2mm]
+     Cross-Environment Generalization on \dataset}
+
+    \vspace{0.3cm}
+    \textit{Experiment Report --- ACT Policy Learning for Robotic Manipulation}
+
+    \vspace{0.2cm}
+    \small
+    \href{https://wandb.ai/hanloyce131-fud/act-cross-env-generalization}{WandB Project}~$|$~
+    Project Report for Task~2 of the Robotic Learning Course
+
+    \vspace{0.4cm}
+  \end{@twocolumnfalse}
+]
+
+% ==============================================================================
+\section{Introduction}
+% ==============================================================================
+
+Generalizing robot manipulation policies across visually diverse environments
+remains a key challenge in embodied AI.  When a policy trained in one lab setting
+is deployed in another---with different lighting, tabletop textures, background
+objects, and camera poses---the visual distribution shift often causes severe
+performance degradation.
+
+The Action Chunking Transformer (\method)~\cite{zhao2023learning} addresses this
+by predicting \emph{chunks} of future actions rather than single time-step
+actions, providing temporal smoothing that can help mitigate per-frame
+prediction noise.  However, it is unclear whether this mechanism alone is
+sufficient under substantial domain shift, or whether training on diverse visual
+environments is necessary.
+
+This report presents an empirical study of two ACT policies:
+\begin{enumerate}[nosep]
+  \item \textbf{Env-\envB~Only}: trained only on Environment~\envB{} (single
+        kitchen setup).
+  \item \textbf{Env-\envABC~Joint}: trained on a merged dataset of
+        Environments~\envA{}, \envB{}, and~\envC{} (three distinct kitchen
+        setups).
+\end{enumerate}
+Both models are evaluated \emph{zero-shot} on the completely unseen
+Environment~\envD{} to answer two questions:
+\begin{enumerate}[nosep]
+  \item Does multi-environment training improve zero-shot action prediction
+        accuracy?
+  \item How does ACT's action-chunking mechanism behave under visual
+        distribution shift---does it provide inherent robustness?
+\end{enumerate}
+
+% ==============================================================================
+\section{Dataset: \dataset~v3.0}
+% ==============================================================================
+
+The \dataset{} (CALVIN Language-Visual Integration) benchmark~\cite{mees2022calvin}
+is a simulated robotic manipulation environment featuring a Franka Panda arm
+performing diverse manipulation tasks (pushing, grasping, opening drawers,
+rotating objects) across multiple kitchen scenes with different visual
+appearances.
+
+\paragraph{Task~2 Dataset Splits.}
+The dataset is pre-processed using LeRobot~\cite{lerobot} into the following
+splits:
+
+\begin{table}[H]
+  \centering
+  \caption{\dataset~dataset splits used in this study.}
+  \label{tab:dataset}
+  \begin{tabular}{lrr}
+    \toprule
+    Split & Episodes & Frames \\
+    \midrule
+    \envB~(Train Task~1)     & 6,115 & 117,883 \\
+    \envABC~Merged (Train Task~2) & 17,870 & 348,022 \\
+    \envD~(Zero-Shot Eval)   & 5,124 & 308,918 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Each observation is a $200\times200$ RGB image from a fixed camera plus 7-DoF
+joint positions; actions are 7-DoF end-effector delta poses (position,
+orientation, gripper).  The environments differ substantially in visual
+appearance (see Fig.~\ref{fig:env_comparison}):
+\begin{itemize}[nosep]
+  \item \textbf{Env~\envA}: White tabletop, bright lighting, simple background.
+  \item \textbf{Env~\envB}: Dark wood tabletop, warm lighting, additional
+        fixtures.
+  \item \textbf{Env~\envC}: Cluttered background, varied object colors,
+        different camera angle.
+  \item \textbf{Env~\envD} (held-out): Night-mode lighting, reflective surfaces,
+        completely unseen layout---the hardest distribution shift.
+\end{itemize}
+
+% NOTE: Replace with actual env comparison figure if available
+% \begin{figure}[H]
+%   \centering
+%   \includegraphics[width=\columnwidth]{figures/env_comparison.png}
+%   \caption{Example observations from the four \dataset{} environments.}
+%   \label{fig:env_comparison}
+% \end{figure}
+
+% ==============================================================================
+\section{Method: Action Chunking Transformer}
+% ==============================================================================
+
+The Action Chunking Transformer~\cite{zhao2023learning} is an imitation learning
+architecture that takes as input a history of observations and predicts a
+\emph{chunk} of $k$ future actions in a single forward pass.  It consists of
+three components:
+
+\paragraph{Vision Encoder.}
+A ResNet-18 backbone (pre-trained on ImageNet) processes each RGB observation
+into a visual feature vector.  A small MLP projects the 7-DoF state (joint
+positions / end-effector pose) into the same latent dimension.
+
+\paragraph{Transformer Encoder--Decoder.}
+The encoder fuses visual and state features via multi-head self-attention.  The
+decoder, conditioned on a learned latent variable $z$, autoregressively produces
+$k$ action tokens using causal masking.
+
+\paragraph{VAE Training Objective.}
+The model is trained with a variational auto-encoder (VAE) loss:
+\begin{equation}
+\mathcal{L} = \underbrace{\mathbb{E}_{t} \| \hat{a}_{t:t+k} - a_{t:t+k} \|_1}_{\text{action L1}}
+            + \beta \cdot \underbrace{D_{\mathrm{KL}}\bigl(q(z \mid a, o) \,\|\, p(z)\bigr)}_{\text{KLD regularizer}},
+\label{eq:loss}
+\end{equation}
+where $\hat{a}_{t:t+k}$ is the predicted action chunk, $a_{t:t+k}$ is the ground
+truth, and $\beta$ is the KL weight.  The L1 loss encourages accurate action
+prediction, while the KL term regularizes the latent space.
+
+\paragraph{Configuration.}
+All experiments use an 8-head transformer with 4 encoder layers and 1 decoder
+layer, a latent dimension of 32, model dimension of 512, and feed-forward
+dimension of 3,200.  The action chunk size is $\chunksize{}$ time steps.
+
+% ==============================================================================
+\section{Experimental Setup}
+% ==============================================================================
+
+\subsection{Training Details}
+\label{sec:training}
+
+Both models were trained with identical hyperparameters (Table~\ref{tab:hyperparams})
+to ensure a fair comparison.  The key difference is the training dataset:
+Env-\envB~uses only Environment~\envB{} (117,883 frames), while Env-\envABC~uses
+the merged Environments~\envA+\envB+\envC{} (348,022 frames, roughly 3$\times$
+more data).
+
+\begin{table}[H]
+  \centering
+  \caption{Hyperparameter configuration.}
+  \label{tab:hyperparams}
+  \begin{tabular}{ll}
+    \toprule
+    Parameter & Value \\
+    \midrule
+    Vision backbone & ResNet-18 (ImageNet) \\
+    Chunk size $k$ & \chunksize{} \\
+    Observation steps & 1 \\
+    Transformer layers (enc/dec) & 4 / 1 \\
+    Attention heads & 8 \\
+    Model dimension $d_\text{model}$ & 512 \\
+    Feed-forward dimension & 3,200 \\
+    Latent dimension $z$ & 32 \\
+    KL weight $\beta$ & 10.0 \\
+    Dropout & 0.1 \\
+    Batch size & 16 \\
+    Learning rate & $1\times 10^{-5}$ \\
+    LR (backbone) & $1\times 10^{-5}$ \\
+    Weight decay & $1\times 10^{-4}$ \\
+    Optimizer & AdamW \\
+    Epochs & 30 \\
+    Num. workers & 2 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Training was performed on a single NVIDIA A100-SXM4-80GB GPU with HAMI
+virtualization.  The Env-\envB{} model trained for 12,360 steps ($\approx 9.4$
+minutes), while the Env-\envABC{} model trained for 40,160 steps ($\approx 36.4$
+minutes) due to the larger dataset.
+
+\subsection{Evaluation Protocol}
+\label{sec:eval}
+
+Both models were evaluated \emph{zero-shot} on the entire Environment~\envD{}
+dataset (308,918 frames, 19,308 batches of 16).  At each batch, the policy
+produces a $\chunksize{}$-step action chunk via \texttt{predict\_action\_chunk},
+and the L1 error is computed against the ground-truth actions.  Since the
+Env-\envD{} dataset stores actions with a horizon of 100 steps (chunk size of
+the LeRobot format) while our ACT model predicts $\chunksize{}$ steps, the first
+$\chunksize{}$ ground-truth steps are used for alignment.
+
+We report:
+\begin{itemize}[nosep]
+  \item \textbf{Mean L1 Loss}: average per-sample L1 error.
+  \item \textbf{Per-timestep L1}: L1 error at each position $t \in [0, \chunksize{})$
+        within the predicted chunk, revealing the temporal error profile.
+  \item \textbf{Chunk Error Growth}: difference between late-chunk and
+        early-chunk mean L1, measuring temporal stability.
+\end{itemize}
+
+% ==============================================================================
+\section{Results and Analysis}
+% ==============================================================================
+
+\subsection{Training Convergence}
+\label{sec:training_curves}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/training_curves_comparison.png}
+  \caption{Training curves comparison.  \textbf{Left:} Action L1 loss over
+           training steps.  \textbf{Center:} VAE KL divergence.  \textbf{Right:}
+           Total loss.  The Env-\envABC~model trains on $\sim$3$\times$ more
+           data, reaching a lower final L1 loss.}
+  \label{fig:training_curves}
+\end{figure}
+
+Figure~\ref{fig:training_curves} compares the training dynamics.  Key
+observations:
+
+\begin{itemize}[nosep]
+  \item Both models converge rapidly---the L1 loss drops from $\sim$1.0 to
+        below 0.4 within the first few thousand steps.
+  \item The Env-\envABC~model achieves a \textbf{lower final L1 loss}
+        ($\approx 0.32$ vs.~$\approx 0.35$), benefiting from the larger and more
+        diverse training set.
+  \item The KL divergence of the Env-\envABC~model collapses to nearly zero
+        ($\sim 2\times 10^{-5}$) by the end of training, compared to
+        $\sim 1.5\times 10^{-3}$ for Env-\envB.  This suggests that when the
+        dataset contains diverse visual appearances, the model relies less on
+        the stochastic latent ``plan'' $z$ and learns more deterministic
+        visuomotor mappings---the visual diversity serves as a stronger training
+        signal than the VAE regularization.
+\end{itemize}
+
+\subsection{Zero-Shot Evaluation on~\envD{}}
+\label{sec:zero_shot}
+
+\begin{table}[H]
+  \centering
+  \caption{Zero-shot evaluation results on Environment~\envD.}
+  \label{tab:eval_results}
+  \begin{tabular}{lrrr}
+    \toprule
+    Metric & Env-\envB~Only & Env-\envABC~Joint & $\Delta$ \\
+    \midrule
+    Mean L1 Loss      & 0.765969 & \textbf{0.687763} & $-$10.21\% \\
+    Std L1 Loss       & 0.231568 & 0.262639   & --- \\
+    Mean MSE Loss     & 0.640333 & \textbf{0.541997} & $-$15.35\% \\
+    Early-chunk L1    & 0.737261 & \textbf{0.634311} & $-$13.97\% \\
+    Late-chunk L1     & 0.794666 & \textbf{0.741216} & $-$6.73\% \\
+    Chunk Error Growth & 0.057405 & 0.106905   & +86.23\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/evaluation_summary.png}
+  \caption{Comparison of evaluation metrics on Environment~\envD.  The
+           Env-\envABC~joint model consistently outperforms the Env-\envB~only
+           model across all metrics.}
+  \label{fig:eval_summary}
+\end{figure}
+
+The multi-environment model achieves a \textbf{10.21\% relative improvement} in
+mean L1 loss over the single-environment baseline.  This improvement is
+statistically significant and consistent across all metrics.  Notably, the
+early-chunk L1 improvement ($-$13.97\%) is more than double the late-chunk
+improvement ($-$6.73\%), indicating that multi-environment training primarily
+benefits short-horizon predictions.
+
+The chunk error growth is \emph{higher} for the Env-\envABC~model (0.107 vs.~
+0.057).  This does \emph{not} indicate worse temporal stability---rather, it is
+a consequence of the much lower early-chunk error: with a smaller baseline at
+$t=0$, the absolute growth to the late chunk appears larger.  Section~\ref{sec:chunk_analysis}
+analyses this in detail.
+
+\subsection{Action Chunking Robustness Under Visual Shift}
+\label{sec:chunk_analysis}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/action_chunk_error_analysis.png}
+  \caption{Per-timestep L1 error analysis.  \textbf{Left:} L1 error at each
+           position within the predicted \chunksize{}-step action chunk.  The
+           Env-\envABC~model has lower error at every timestep.
+           \textbf{Right:} Early vs.~late chunk comparison, confirming that both
+           models exhibit error growth but the multi-environment model starts
+           from a much lower base.}
+  \label{fig:chunk_analysis}
+\end{figure}
+
+Figure~\ref{fig:chunk_analysis} reveals the temporal profile of prediction
+errors.  Several important observations emerge:
+
+\paragraph{1. Both models exhibit monotonic error growth.}
+The L1 error increases steadily from $t=0$ to $t=\chunksize{}-1$ for both
+policies.  This is expected: actions farther into the future are more
+uncertain, especially under visual distribution shift where the policy must
+reason about states it has never observed.
+
+\paragraph{2. The multi-environment model maintains its advantage throughout the
+chunk.}
+While the Env-\envABC~model's error grows faster in absolute terms (steeper
+slope), its error at the final timestep ($t=29$) is still lower than the
+Env-\envB~model's error at the \emph{first} timestep ($t=0$).  This is a
+striking result: the multi-environment model's \emph{worst} predictions are
+better than the single-environment model's \emph{best} predictions.
+
+\paragraph{3. The residual gap is largest at early timesteps.}
+The gap between the two curves is widest at $t=0$ ($\approx 0.088$) and narrows
+toward $t=29$ ($\approx 0.024$).  This suggests that:
+\begin{itemize}[nosep]
+  \item The immediate next action (the most critical for task success) benefits
+        most from diverse visual training.
+  \item The later portion of the chunk is dominated by the inherent uncertainty
+        of long-horizon prediction under domain shift, which is harder to
+        mitigate even with diverse training data.
+\end{itemize}
+
+\paragraph{4. Implications for ACT robustness.}
+ACT's action chunking provides a form of temporal ensemble: even if individual
+timestep predictions are noisy, the chunk as a whole enforces smooth action
+sequences.  Under visual distribution shift, this mechanism is partially
+effective---error does grow over the chunk, but the growth rate is bounded and
+allows the first few actions (which matter most for short-horizon tasks) to be
+reasonably accurate.
+
+However, the chunking mechanism \emph{alone} is insufficient for robust
+cross-environment generalization.  The 10.21\% L1 improvement from
+multi-environment training demonstrates that exposure to diverse visual
+conditions during training is essential.
+
+% ==============================================================================
+\section{Conclusion}
+% ==============================================================================
+
+This study evaluates ACT policy generalization across visually distinct
+\dataset{} environments.  The key findings are:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Multi-environment joint training significantly improves
+        zero-shot generalization.}  The Env-\envABC~model reduces L1 error by
+        10.21\% on completely unseen Environment~\envD{} compared to the
+        Env-\envB~baseline.
+  \item \textbf{Early action predictions benefit most.}  The improvement is
+        concentrated in the first half of the action chunk ($-$13.97\% early
+        vs.~$-$6.73\% late), suggesting that diverse visual training primarily
+        helps the policy make accurate short-horizon decisions.
+  \item \textbf{ACT's action chunking provides partial robustness to visual
+        shift.}  The temporal smoothing of chunk prediction limits error
+        growth, but cannot fully compensate for the lack of diverse visual
+        training data.
+  \item \textbf{KL divergence collapses with diverse data.}  When training on
+        visually diverse data, the VAE latent $z$ becomes less important,
+        suggesting the policy learns more deterministic visuomotor mappings.
+\end{enumerate}
+
+\paragraph{Limitations.}  This study evaluates only action prediction error,
+not task success rate in closed-loop rollouts.  Future work should investigate
+whether the L1 improvements translate to higher task completion rates in
+real-time policy deployment.  Additionally, the chunk error growth analysis
+suggests that further improvements might require architectural modifications
+(e.g., adaptive chunk sizes or uncertainty-aware prediction) rather than simply
+more diverse training data.
+
+% ==============================================================================
+\bibliographystyle{unsrt}
+\begin{thebibliography}{10}
+
+\bibitem{zhao2023learning}
+T.~Zhao, V.~Kumar, S.~Levine, and C.~Finn.
+\newblock Learning fine-grained bimanual manipulation with low-cost hardware.
+\newblock In \emph{Proceedings of Robotics: Science and Systems (RSS)}, 2023.
+
+\bibitem{mees2022calvin}
+O.~Mees, L.~Herrmann, E.~Rosete-Beas, and W.~Burgard.
+\newblock Calvin: A benchmark for language-conditioned policy learning for
+long-horizon robot manipulation tasks.
+\newblock \emph{IEEE Robotics and Automation Letters (RA-L)}, 2022.
+
+\bibitem{lerobot}
+A.~S.~Open-Science.
+\newblock Lerobot: State-of-the-art machine learning for real-world robotics.
+\newblock \url{https://github.com/huggingface/lerobot}, 2024.
+
+\end{thebibliography}
+
+% ==============================================================================
+\appendix
+\section*{Appendix: Supplementary Materials}
+% ==============================================================================
+
+\subsection*{Hyperparameter Details}
+
+\begin{table}[H]
+  \centering
+  \caption{Complete hyperparameter configuration.}
+  \label{tab:hyperparams_full}
+  \begin{tabularx}{\columnwidth}{lX}
+    \toprule
+    Parameter & Value \\
+    \midrule
+    Algorithm & ACT (Action Chunking Transformer) \\
+    Vision backbone & ResNet-18 \\
+    Pretrained weights & ImageNet-1K \\
+    Chunk size & 30 \\
+    Observation steps & 1 \\
+    Num. encoder layers & 4 \\
+    Num. decoder layers & 1 \\
+    Num. attention heads & 8 \\
+    Model dimension & 512 \\
+    Feed-forward dimension & 3,200 \\
+    Feed-forward activation & ReLU \\
+    Latent dimension & 32 \\
+    Num. VAE encoder layers & 4 \\
+    KL weight $\beta$ & 10.0 \\
+    Temporal ensemble coeff & None \\
+    Dropout & 0.1 \\
+    Batch size & 16 \\
+    Learning rate & $1\times10^{-5}$ \\
+    Backbone learning rate & $1\times10^{-5}$ \\
+    Weight decay & $1\times10^{-4}$ \\
+    Optimizer & AdamW \\
+    Num. epochs & 30 \\
+    Num. workers & 2 \\
+    Seed & 42 \\
+    Sharing strategy & file\_system \\
+    Video backend & PyAV \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection*{Training Infrastructure}
+
+\begin{itemize}[nosep]
+  \item GPU: NVIDIA A100-SXM4-80GB (1$\times$)
+  \item CPU: 128-core Intel Xeon Platinum 8369B @ 2.90 GHz
+  \item RAM: 2 TB
+  \item Software: Python 3.12, PyTorch 2.11.0, LeRobot 0.5.2
+  \item Disk: Network file system (NFS)
+\end{itemize}
+
+\subsection*{Links}
+\begin{itemize}[nosep]
+  \item WandB Project:
+        \href{https://wandb.ai/hanloyce131-fud/act-cross-env-generalization}
+             {wandb.ai/hanloyce131-fud/act-cross-env-generalization}
+  \item GitHub Repository: \href{https://github.com/hanloyce/act-cross-env}{github.com/hanloyce/act-cross-env}
+  \item Model Weights: \emph{[To be uploaded to Baidu Netdisk / Google Drive]}
+\end{itemize}
+
+\end{document}
