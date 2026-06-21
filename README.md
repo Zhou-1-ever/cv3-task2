@@ -121,7 +121,7 @@ python compare_results.py
 
 *Bar chart comparing all evaluation metrics.*
 
-> **Note**: Some figures may not display if not downloaded. View them on [WandB](https://wandb.ai/hanloyce131-fud/act-cross-env-generalization).
+> **Note**: Some figures may not display if not downloaded. View them on [WandB](https://wandb.ai/hanloyce131-fud/act-cross-env-generalization) or the report.
 
 ---
 
