@@ -6,7 +6,7 @@
 
 ---
 
-## 📋 Overview
+##  Overview
 
 This project investigates how Action Chunking Transformer (ACT) policies generalize across visually diverse robotic manipulation environments. We compare two training strategies:
 
@@ -28,7 +28,7 @@ Both models are evaluated **zero-shot** on an unseen Environment D to measure cr
 
 ---
 
-## 🧠 Method: Action Chunking Transformer
+##  Method: Action Chunking Transformer
 
 ACT [Zhao et al., 2023](https://arxiv.org/abs/2304.13705) predicts **chunks** of $k=30$ future actions per inference step using a Transformer encoder-decoder with VAE training:
 
@@ -40,7 +40,7 @@ $$\mathcal{L} = \underbrace{\mathbb{E}_t \|\hat{a}_{t:t+k} - a_{t:t+k}\|_1}_{\te
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 .
@@ -60,7 +60,7 @@ $$\mathcal{L} = \underbrace{\mathbb{E}_t \|\hat{a}_{t:t+k} - a_{t:t+k}\|_1}_{\te
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 
@@ -101,7 +101,7 @@ python compare_results.py
 
 ---
 
-## 📊 Results
+##  Results
 
 ### Training Convergence
 
@@ -125,7 +125,7 @@ python compare_results.py
 
 ---
 
-## 📝 Experimental Setup
+##  Experimental Setup
 
 | Parameter | Value |
 |-----------|-------|
